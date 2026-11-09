@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+
+# Manga Cache & Downloads
+mangas/
+*.cbz
+*.pdf
+.cache/
+
+# OS & Editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Arch Linux packaging artifacts
+src/
+pkg/
+*.pkg.tar.zst
+*.pkg.tar.xz

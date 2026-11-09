@@ -1,0 +1,626 @@
+#!/usr/bin/env python3
+"""
+shade-cli: Lector interactivo de manga estilo ani-cli para terminal.
+Descarga y abre capítulos como PDF en tu visor favorito sin anuncios.
+Compatible con macOS y distribuciones Linux (Arch Linux, Debian, Fedora, etc.).
+"""
+
+import sys
+import os
+import re
+import json
+import ssl
+import shutil
+import tempfile
+import zipfile
+import subprocess
+import urllib.request
+import urllib.parse
+from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
+
+# --- Constants & Configuration ---
+
+VERSION = "1.1.0"
+API_BASE = "https://shademanga.com/api"
+CONFIG_DIR = Path.home() / ".config" / "shade-cli"
+CACHE_DIR = Path.home() / ".cache" / "shade-cli"
+HISTORY_FILE = CONFIG_DIR / "history.json"
+USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+# ANSI Colors
+CLR_RESET = "\033[0m"
+CLR_BOLD = "\033[1m"
+CLR_DIM = "\033[2m"
+CLR_GREEN = "\033[32m"
+CLR_YELLOW = "\033[33m"
+CLR_BLUE = "\033[34m"
+CLR_CYAN = "\033[36m"
+
+
+# --- Main Entry Point ---
+
+def main():
+    """Main CLI entry point."""
+    args = parse_arguments()
+
+    if args.version:
+        print_banner()
+        print(f"shade-cli v{VERSION}")
+        sys.exit(0)
+
+    if args.continue_reading:
+        handle_continue_reading(download_mode=args.download, terminal_mode=args.terminal)
+        return
+
+    query = " ".join(args.query).strip() if args.query else ""
+    if not query:
+        print_banner()
+        query = prompt_search_query()
+        if not query:
+            print_info("Búsqueda cancelada.")
+            sys.exit(0)
+
+    run_interactive_flow(query, download_mode=args.download, terminal_mode=args.terminal)
+
+
+# --- Interactive Workflows ---
+
+def run_interactive_flow(query: str, download_mode: bool = False, terminal_mode: bool = False):
+    """Executes search -> select manga -> chapter loop."""
+    print_info(f"Buscando '{query}'...")
+    mangas = fetch_search_results(query)
+    if not mangas:
+        print_warn(f"No se encontraron resultados para: '{query}'")
+        return
+
+    selected_manga = pick_manga(mangas)
+    if not selected_manga:
+        return
+
+    start_manga_session(selected_manga, download_mode=download_mode, terminal_mode=terminal_mode)
+
+
+def handle_continue_reading(download_mode: bool = False, terminal_mode: bool = False):
+    """Resumes reading the last viewed manga from history."""
+    history = load_history()
+    last_manga = history.get("last_manga")
+    if not last_manga:
+        print_warn("No hay historial guardado. Inicia una búsqueda normal con 'shade-cli <nombre>'.")
+        return
+
+    print_info(f"Continuando: {CLR_BOLD}{last_manga.get('titulo')}{CLR_RESET}")
+    start_manga_session(
+        last_manga,
+        initial_chapter_id=history.get("last_chapter_id"),
+        download_mode=download_mode,
+        terminal_mode=terminal_mode
+    )
+
+
+def start_manga_session(manga: dict, initial_chapter_id: str = None, download_mode: bool = False, terminal_mode: bool = False):
+    """Manages the continuous chapter reading / download loop."""
+    public_id = manga.get("publicId")
+    title = manga.get("titulo", "Manga")
+
+    print_info(f"Cargando capítulos de '{title}'...")
+    chapters = fetch_chapters(public_id)
+    if not chapters:
+        print_warn("Esta serie no tiene capítulos disponibles.")
+        return
+
+    current_chapter = None
+    if initial_chapter_id:
+        current_chapter = next((c for c in chapters if c.get("publicId") == initial_chapter_id), None)
+
+    while True:
+        if not current_chapter:
+            current_chapter = pick_chapter(chapters, manga_title=title)
+            if not current_chapter:
+                break
+
+        # Save progress
+        save_history(manga, current_chapter)
+
+        if download_mode:
+            download_chapter(current_chapter, manga_title=title)
+            current_chapter = None
+            break
+
+        # Read chapter (PDF by default, ani-cli style)
+        if terminal_mode:
+            read_in_terminal_mode(current_chapter, manga_title=title)
+        else:
+            read_in_pdf_mode(current_chapter, manga_title=title)
+
+        # Loop controls like ani-cli
+        curr_idx = chapters.index(current_chapter)
+        next_chap = chapters[curr_idx + 1] if curr_idx + 1 < len(chapters) else None
+        prev_chap = chapters[curr_idx - 1] if curr_idx > 0 else None
+
+        next_str = f"Cap. {next_chap.get('numeroCapitulo')}" if next_chap else "Ninguno"
+        prev_str = f"Cap. {prev_chap.get('numeroCapitulo')}" if prev_chap else "Ninguno"
+
+        print(f"\n{CLR_DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{CLR_RESET}")
+        print(f" {CLR_BOLD}[Enter]{CLR_RESET} Siguiente ({next_str})   {CLR_BOLD}[b]{CLR_RESET} Anterior ({prev_str})")
+        print(f" {CLR_BOLD}[r]{CLR_RESET} Reabrir actual           {CLR_BOLD}[c]{CLR_RESET} Cambiar capítulo     {CLR_BOLD}[q]{CLR_RESET} Salir")
+        print(f"{CLR_DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{CLR_RESET}")
+
+        cmd = prompt_input(f"{CLR_GREEN}shade-cli > {CLR_RESET}").lower()
+
+        if cmd in ("q", "quit", "exit"):
+            break
+        elif cmd in ("b", "back"):
+            if prev_chap:
+                current_chapter = prev_chap
+            else:
+                print_warn("Ya estás en el primer capítulo disponible.")
+        elif cmd in ("r", "reopen"):
+            continue
+        elif cmd in ("c", "chapters"):
+            current_chapter = None
+        else:
+            # Enter / default goes to next chapter
+            if next_chap:
+                current_chapter = next_chap
+            else:
+                print_success("¡Has llegado al último capítulo disponible!")
+                current_chapter = None
+
+
+# --- Reading Engines ---
+
+def read_in_pdf_mode(chapter: dict, manga_title: str):
+    """
+    Downloads chapter pages in parallel, compiles into a high-res PDF,
+    and opens it in the system viewer (Preview on macOS, zathura/xdg-open on Linux).
+    """
+    chap_id = chapter.get("publicId")
+    chap_num = chapter.get("numeroCapitulo", "?")
+    pages = fetch_chapter_pages(chap_id)
+
+    if not pages:
+        print_warn(f"No se pudieron obtener las páginas del Cap. {chap_num}.")
+        return
+
+    safe_title = sanitize_filename(manga_title)
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    pdf_path = CACHE_DIR / f"{safe_title} - Cap {chap_num}.pdf"
+
+    if not pdf_path.exists():
+        total = len(pages)
+        print_info(f"Descargando {total} páginas de {manga_title} (Cap. {chap_num})...")
+
+        with tempfile.TemporaryDirectory(prefix="shade_pdf_") as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            downloaded_files = download_pages_parallel(pages, tmp_path)
+
+            if not downloaded_files:
+                print_warn("Error al descargar páginas.")
+                return
+
+            print_info("Generando PDF del capítulo...")
+            success = compile_images_to_pdf(downloaded_files, pdf_path)
+            if not success:
+                print_warn("No se pudo compilar el PDF. Verifica tener instalado 'graphicsmagick' o 'imagemagick'.")
+                return
+
+    print_success(f"Capítulo listo. Abriendo en tu visor de PDF...")
+    open_file_in_system_viewer(pdf_path)
+
+
+def read_in_terminal_mode(chapter: dict, manga_title: str):
+    """Fallback reader directly in terminal blocks with timg."""
+    chap_id = chapter.get("publicId")
+    chap_num = chapter.get("numeroCapitulo", "?")
+    pages = fetch_chapter_pages(chap_id)
+    if not pages:
+        return
+
+    total = len(pages)
+    with tempfile.TemporaryDirectory(prefix="shade_term_") as tmp_dir:
+        tmp_path = Path(tmp_dir)
+        downloaded = download_pages_parallel(pages, tmp_path)
+
+        for idx, img_path in enumerate(downloaded):
+            clear_screen()
+            print(f"{CLR_BOLD}{manga_title}{CLR_RESET} ─ Cap. {chap_num} [{idx + 1}/{total}]")
+            render_image_timg(img_path)
+            try:
+                cmd = input(f"\n[Pág {idx + 1}/{total}] (Enter: Siguiente, q: Salir): ").strip().lower()
+                if cmd == "q":
+                    break
+            except (KeyboardInterrupt, EOFError):
+                break
+
+
+# --- PDF Compilation & Downloader ---
+
+def compile_images_to_pdf(image_files: list, output_pdf: Path) -> bool:
+    """
+    Compiles image paths into a single PDF.
+    Supports GraphicsMagick (gm), ImageMagick 7 (magick), ImageMagick 6 (convert),
+    img2pdf, and macOS sips+poppler.
+    """
+    # 1. Try GraphicsMagick (gm)
+    gm_bin = shutil.which("gm") or (os.path.exists("/opt/homebrew/bin/gm") and "/opt/homebrew/bin/gm")
+    if gm_bin:
+        cmd = [gm_bin, "convert", "-compress", "JPEG"] + [str(f) for f in image_files] + [str(output_pdf)]
+        res = subprocess.run(cmd, capture_output=True)
+        if res.returncode == 0 and output_pdf.exists():
+            return True
+
+    # 2. Try ImageMagick 7 (magick) - default on modern Arch Linux
+    magick_bin = shutil.which("magick")
+    if magick_bin:
+        cmd = [magick_bin] + [str(f) for f in image_files] + [str(output_pdf)]
+        res = subprocess.run(cmd, capture_output=True)
+        if res.returncode == 0 and output_pdf.exists():
+            return True
+
+    # 3. Try ImageMagick legacy (convert)
+    convert_bin = shutil.which("convert")
+    if convert_bin:
+        cmd = [convert_bin] + [str(f) for f in image_files] + [str(output_pdf)]
+        res = subprocess.run(cmd, capture_output=True)
+        if res.returncode == 0 and output_pdf.exists():
+            return True
+
+    # 4. Try img2pdf (python-img2pdf on Arch Linux)
+    img2pdf_bin = shutil.which("img2pdf")
+    if img2pdf_bin:
+        cmd = [img2pdf_bin, "-o", str(output_pdf)] + [str(f) for f in image_files]
+        res = subprocess.run(cmd, capture_output=True)
+        if res.returncode == 0 and output_pdf.exists():
+            return True
+
+    # 5. Fallback on macOS: sips + pdfunite
+    pdfunite = shutil.which("pdfunite") or (os.path.exists("/opt/homebrew/bin/pdfunite") and "/opt/homebrew/bin/pdfunite")
+    sips = shutil.which("sips") or "/usr/bin/sips"
+    if pdfunite and sips and os.path.exists(sips):
+        with tempfile.TemporaryDirectory(prefix="sips_pdf_") as stmp:
+            stmp_path = Path(stmp)
+            single_pdfs = []
+            for idx, img in enumerate(image_files):
+                spdf = stmp_path / f"p_{idx:03d}.pdf"
+                subprocess.run([sips, "-s", "format", "pdf", str(img), "--out", str(spdf)], capture_output=True)
+                if spdf.exists():
+                    single_pdfs.append(str(spdf))
+
+            if single_pdfs:
+                subprocess.run([pdfunite] + single_pdfs + [str(output_pdf)], capture_output=True)
+                return output_pdf.exists()
+
+    return False
+
+
+def download_pages_parallel(pages: list, dest_dir: Path) -> list:
+    """Downloads pages concurrently using a thread pool."""
+    def _download_single(item):
+        idx, url = item
+        ext = url.split("?")[0].split(".")[-1] or "webp"
+        file_path = dest_dir / f"p_{idx:03d}.{ext}"
+        download_binary_file(url, file_path)
+        return idx, file_path
+
+    items = list(enumerate(pages, 1))
+    results = []
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        for idx, path in executor.map(_download_single, items):
+            results.append((idx, path))
+
+    results.sort(key=lambda x: x[0])
+    return [path for _, path in results]
+
+
+def download_chapter(chapter: dict, manga_title: str):
+    """Downloads all pages and creates a .cbz comic archive in ./mangas/."""
+    chap_id = chapter.get("publicId")
+    chap_num = chapter.get("numeroCapitulo", "?")
+    pages = fetch_chapter_pages(chap_id)
+    if not pages:
+        print_warn("No hay páginas para descargar.")
+        return
+
+    safe_title = sanitize_filename(manga_title)
+    out_dir = Path.cwd() / "mangas" / safe_title
+    out_dir.mkdir(parents=True, exist_ok=True)
+    cbz_filename = out_dir / f"{safe_title} - Cap {chap_num}.cbz"
+
+    total = len(pages)
+    print_info(f"Descargando {total} páginas a: {cbz_filename.name}")
+
+    with tempfile.TemporaryDirectory(prefix="shade_dl_") as tmp_dir:
+        tmp_path = Path(tmp_dir)
+        downloaded = download_pages_parallel(pages, tmp_path)
+
+        print_info("Empaquetando en archivo CBZ...")
+        with zipfile.ZipFile(cbz_filename, "w", zipfile.ZIP_DEFLATED) as zipf:
+            for f in sorted(downloaded):
+                zipf.write(f, arcname=f.name)
+
+    print_success(f"Guardado exitosamente en: {cbz_filename}")
+
+
+# --- Interactive Pickers (FZF & Fallbacks) ---
+
+def pick_manga(mangas: list) -> dict:
+    """FZF/Prompt manga selector."""
+    if has_fzf():
+        items = []
+        for m in mangas:
+            pid = m.get("publicId", "")
+            tit = m.get("titulo", "")
+            aut = m.get("autor") or "Desconocido"
+            items.append(f"{pid}\t{tit}  {CLR_DIM}({aut}){CLR_RESET}")
+
+        selected_line = run_fzf(items, prompt="Selecciona manga > ")
+        if not selected_line:
+            return None
+        selected_pid = selected_line.split("\t")[0].strip()
+        return next((m for m in mangas if m.get("publicId") == selected_pid), None)
+
+    print(f"\n{CLR_BOLD}Mangas encontrados:{CLR_RESET}")
+    for idx, m in enumerate(mangas, 1):
+        print(f" [{CLR_CYAN}{idx}{CLR_RESET}] {m.get('titulo')} {CLR_DIM}({m.get('autor') or 'Desconocido'}){CLR_RESET}")
+
+    choice = prompt_number(f"\nSelecciona manga [1-{len(mangas)}] (o 'q' para salir): ", 1, len(mangas))
+    return mangas[choice - 1] if choice else None
+
+
+def pick_chapter(chapters: list, manga_title: str) -> dict:
+    """FZF/Prompt chapter selector."""
+    if has_fzf():
+        items = []
+        for c in chapters:
+            pid = c.get("publicId", "")
+            num = c.get("numeroCapitulo", "?")
+            tit = c.get("titulo") or f"Capítulo {num}"
+            pages = c.get("totalPaginas", "?")
+            scan = c.get("grupoScan", {}).get("nombre", "") if c.get("grupoScan") else ""
+            scan_str = f" [{scan}]" if scan else ""
+            items.append(f"{pid}\tCap. {num:<4} │ {tit:<25} │ {pages} págs{scan_str}")
+
+        selected_line = run_fzf(items, prompt=f"{manga_title} > ")
+        if not selected_line:
+            return None
+        selected_pid = selected_line.split("\t")[0].strip()
+        return next((c for c in chapters if c.get("publicId") == selected_pid), None)
+
+    print(f"\n{CLR_BOLD}Capítulos de {manga_title}:{CLR_RESET}")
+    for idx, c in enumerate(chapters, 1):
+        num = c.get("numeroCapitulo", "?")
+        pages = c.get("totalPaginas", "?")
+        print(f" [{CLR_CYAN}{idx}{CLR_RESET}] Cap. {num} ({pages} págs)")
+
+    choice = prompt_number(f"\nSelecciona capítulo [1-{len(chapters)}] (o 'q' para salir): ", 1, len(chapters))
+    return chapters[choice - 1] if choice else None
+
+
+# --- API Client ---
+
+def fetch_search_results(query: str) -> list:
+    """Searches series via ShadeManga API."""
+    encoded = urllib.parse.quote(query)
+    data = make_api_request(f"/series-locales?q={encoded}")
+    return data if isinstance(data, list) else []
+
+
+def fetch_chapters(series_public_id: str) -> list:
+    """Fetches series chapters sorted ascending."""
+    data = make_api_request(f"/series-locales/{series_public_id}/capitulos")
+    if not isinstance(data, list):
+        return []
+    return sorted(data, key=lambda c: c.get("orden", c.get("numeroCapitulo", 0)))
+
+
+def fetch_chapter_pages(chapter_public_id: str) -> list:
+    """Fetches list of page image URLs."""
+    data = make_api_request(f"/series-locales/capitulo/{chapter_public_id}/paginas")
+    if isinstance(data, dict):
+        return data.get("paginas", [])
+    return []
+
+
+def make_api_request(endpoint: str):
+    """Executes GET request against the API."""
+    url = f"{API_BASE}{endpoint}"
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+
+    with urllib.request.urlopen(req, context=ctx) as res:
+        return json.loads(res.read().decode("utf-8"))
+
+
+def download_binary_file(url: str, dest_path: Path):
+    """Downloads binary file."""
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+
+    with urllib.request.urlopen(req, context=ctx) as res, open(dest_path, "wb") as f:
+        shutil.copyfileobj(res, f)
+
+
+# --- System & Platform Helpers ---
+
+def open_file_in_system_viewer(file_path: Path):
+    """
+    Opens file in system viewer.
+    - macOS: Preview.app (open)
+    - Linux / Arch Linux: Checks $MANGA_VIEWER, $PDFVIEWER, xdg-open, zathura, mupdf, evince, okular.
+    """
+    if sys.platform == "darwin":
+        subprocess.Popen(["open", str(file_path)])
+        return
+
+    # Linux (Arch Linux, etc.)
+    custom_viewer = os.environ.get("MANGA_VIEWER") or os.environ.get("PDFVIEWER")
+    candidates = [custom_viewer, "zathura", "mupdf", "xdg-open", "evince", "okular"]
+
+    for viewer in candidates:
+        if viewer and shutil.which(viewer):
+            subprocess.Popen([viewer, str(file_path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return
+
+    print_warn(f"No se detectó un visor PDF gráfico. Puedes abrir el archivo manualmente en: {file_path}")
+
+
+def render_image_timg(img_path: Path):
+    """Renders image in terminal using timg."""
+    timg = shutil.which("timg") or "/opt/homebrew/bin/timg"
+    if os.path.exists(timg):
+        subprocess.run([timg, "-pq", str(img_path)])
+
+
+def has_fzf() -> bool:
+    """Checks for fzf binary."""
+    return bool(shutil.which("fzf") or os.path.exists("/opt/homebrew/bin/fzf"))
+
+
+def run_fzf(items: list, prompt: str = "> ") -> str:
+    """Runs fzf interactive menu."""
+    fzf_bin = shutil.which("fzf") or "/opt/homebrew/bin/fzf"
+    cmd = [
+        fzf_bin,
+        f"--prompt={prompt}",
+        "--height=45%",
+        "--reverse",
+        "--ansi",
+        "--tabstop=4",
+        "--delimiter=\t",
+        "--with-nth=2.."
+    ]
+    try:
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        stdout, _ = proc.communicate(input="\n".join(items))
+        return stdout.strip() if proc.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def clear_screen():
+    """Clears terminal screen."""
+    os.system("clear" if os.name != "nt" else "cls")
+
+
+def sanitize_filename(name: str) -> str:
+    """Sanitizes filename strings."""
+    return re.sub(r'[\\/*?:"<>|]', "", name).strip()
+
+
+# --- History Management ---
+
+def load_history() -> dict:
+    """Loads history from config."""
+    if HISTORY_FILE.exists():
+        try:
+            with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+
+def save_history(manga: dict, chapter: dict):
+    """Saves history to config."""
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    history = {
+        "last_manga": {
+            "publicId": manga.get("publicId"),
+            "titulo": manga.get("titulo"),
+            "autor": manga.get("autor")
+        },
+        "last_chapter_id": chapter.get("publicId"),
+        "last_chapter_num": chapter.get("numeroCapitulo")
+    }
+    try:
+        with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(history, f, indent=2, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+# --- CLI Output & Arguments ---
+
+def parse_arguments():
+    """Parses command line arguments."""
+    import argparse
+    parser = argparse.ArgumentParser(
+        prog="shade-cli",
+        description="Lector interactivo de manga estilo ani-cli para terminal con apertura automática en PDF."
+    )
+    parser.add_argument("query", nargs="*", help="Nombre del manga a buscar")
+    parser.add_argument("-c", "--continue", dest="continue_reading", action="store_true", help="Continuar leyendo el último manga")
+    parser.add_argument("-d", "--download", action="store_true", help="Modo descarga (crea archivos .cbz)")
+    parser.add_argument("-t", "--terminal", action="store_true", help="Forzar renderizado ASCII en la terminal")
+    parser.add_argument("-v", "--version", action="store_true", help="Mostrar versión")
+    return parser.parse_args()
+
+
+def print_banner():
+    """Prints ASCII banner."""
+    banner = f"""{CLR_CYAN}{CLR_BOLD}
+   _____ __               __        ________    ____
+  / ___// /_  ____ _____/ /__     / ____/ /   /  _/
+  \\__ \\/ __ \\/ __ `/ __  / _ \\   / /   / /    / /  
+ ___/ / / / / /_/ / /_/ /  __/  / /___/ /____/ /   
+/____/_/ /_/\\__,_/\\__,_/\\___/   \\____/_____/___/   
+{CLR_DIM}    Manga en terminal • Visor PDF nativo • Estilo ani-cli{CLR_RESET}
+"""
+    print(banner)
+
+
+def prompt_search_query() -> str:
+    """Prompts for search query."""
+    try:
+        return input(f"{CLR_BOLD}{CLR_GREEN}Buscar manga > {CLR_RESET}").strip()
+    except (KeyboardInterrupt, EOFError):
+        return ""
+
+
+def prompt_input(message: str, default: str = "") -> str:
+    """Prompts for general input."""
+    try:
+        res = input(message).strip()
+        return res if res else default
+    except (KeyboardInterrupt, EOFError):
+        return default
+
+
+def prompt_number(message: str, min_val: int, max_val: int):
+    """Prompts for a number in range."""
+    while True:
+        try:
+            val = input(message).strip().lower()
+            if val in ("q", "quit", "exit"):
+                return None
+            num = int(val)
+            if min_val <= num <= max_val:
+                return num
+        except (ValueError, KeyboardInterrupt, EOFError):
+            return None
+        print_warn(f"Introduce un número entre {min_val} y {max_val}.")
+
+
+def print_info(msg: str):
+    print(f"{CLR_BLUE}:: {CLR_RESET}{msg}")
+
+
+def print_success(msg: str):
+    print(f"{CLR_GREEN}✔ {CLR_RESET}{msg}")
+
+
+def print_warn(msg: str):
+    print(f"{CLR_YELLOW}▲ {CLR_RESET}{msg}")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nSaliendo...")
+        sys.exit(0)
