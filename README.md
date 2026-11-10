@@ -90,7 +90,7 @@ shade-cli tiene cuatro pantallas. En todas puedes escribir para filtrar, **Enter
 
 | Pantalla | Enter | Esc |
 | --- | --- | --- |
-| Buscar manga | Busca lo que escribiste | Sale de shade-cli |
+| Buscar manga | Busca lo que escribiste. Si no hay coincidencia exacta, te muestra los títulos parecidos, así que aguanta typos como «naurto» o «berzerk» | Sale de shade-cli |
 | Resultados | Abre la lista de capítulos | Regresa a *Buscar manga* |
 | Capítulos | Abre el capítulo (con `-d`, lo descarga) | Regresa a *Resultados* |
 | ¿Qué sigue? | Ejecuta la opción elegida | Regresa a *Capítulos* |
@@ -153,6 +153,7 @@ En macOS, el PDF siempre se abre con tu visor predeterminado (normalmente Vista 
 | `No se detectó un visor PDF gráfico` (Linux) | Instala un visor (por ejemplo, `zathura zathura-pdf-mupdf`) o define `MANGA_VIEWER`. Mientras tanto, el mensaje muestra la ruta del PDF para que lo abras a mano. |
 | Esc no hace nada y ves listas numeradas | No se encontró `fzf`. Instálalo. Sin fzf, Enter vacío o `q` regresan. |
 | `-t` no muestra las páginas | Instala `timg`. |
+| `El servidor no respondió a la búsqueda aproximada` | El sitio limita cuántas búsquedas acepta por minuto. Espera unos segundos y vuelve a buscar. |
 
 ## Desarrollo
 
