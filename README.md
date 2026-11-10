@@ -97,6 +97,8 @@ shade-cli tiene cuatro pantallas. En todas puedes escribir para filtrar, **Enter
 
 Los capítulos aparecen en orden de lectura (0.5, 1, 1.5, 2…).
 
+Los títulos **+18 NSFW** nunca se mezclan con los demás. Si la búsqueda encuentra alguno, la lista de resultados termina con una entrada **+18 NSFW** que dice cuántos hay, y shade-cli te avisa antes de mostrar la lista. Esa entrada abre una lista solo con los títulos +18; Esc te regresa a los resultados normales. La clasificación viene del sitio: shade-cli separa las series que shademanga.com marca para mayores de edad.
+
 **¿Qué sigue?** aparece después de abrir cada capítulo:
 
 - **Siguiente**, **Reabrir** y **Anterior**: *Siguiente* y *Anterior* solo aparecen cuando ese capítulo existe.

@@ -55,9 +55,12 @@ MAX_SEARCH_PROBES = 8  # The API answers HTTP 429 when flooded.
 PARALLEL_PROBES = 4
 MIN_PROBE_LENGTH = 3  # Shorter pieces match thousands of titles and push the right one off the first page.
 
-# Reader menu values that are actions instead of chapters.
+# Picker values that are actions instead of a manga or a chapter.
 QUIT = object()
 SAVE_PDF = object()
+ADULT_CATEGORY = object()
+
+ADULT_PROMPT = "+18 NSFW > "
 
 
 # --- Main Entry Point ---
@@ -109,17 +112,42 @@ def browse_from_search(initial_query: str, download_mode: bool = False, terminal
 
 
 def browse_search_results(query: str, download_mode: bool = False, terminal_mode: bool = False):
-    """Search results screen. Esc returns to the search prompt."""
+    """Search results screen: general titles, with +18 titles behind their own entry. Esc returns to the search prompt."""
     print_info(f"Buscando '{query}'...")
     mangas = search_series(query)
     if not mangas:
         print_warn(f"No se encontraron resultados para: '{query}'")
         return
 
-    manga = pick_manga(mangas)
+    general, adult = split_by_age_rating(mangas)
+    if adult:
+        print_info(f"{results_count(len(adult))} +18 NSFW quedaron aparte: están en «+18 NSFW», al final de la lista.")
+    choice = pick_manga(general, adult_count=len(adult))
+    while choice:
+        if choice is ADULT_CATEGORY:
+            browse_adult_results(adult, download_mode=download_mode, terminal_mode=terminal_mode)
+        else:
+            browse_chapters(choice, download_mode=download_mode, terminal_mode=terminal_mode)
+        choice = pick_manga(general, adult_count=len(adult))
+
+
+def split_by_age_rating(mangas: list) -> tuple:
+    """(general, adult). Adult titles are the ones the API flags with esMayorDeEdad; unflagged ones count as general."""
+    general = [m for m in mangas if not m.get("esMayorDeEdad")]
+    adult = [m for m in mangas if m.get("esMayorDeEdad")]
+    return general, adult
+
+
+def results_count(count: int) -> str:
+    return f"{count} resultado" if count == 1 else f"{count} resultados"
+
+
+def browse_adult_results(mangas: list, download_mode: bool = False, terminal_mode: bool = False):
+    """+18 NSFW results screen. Esc returns to the general search results."""
+    manga = pick_manga(mangas, prompt=ADULT_PROMPT)
     while manga:
         browse_chapters(manga, download_mode=download_mode, terminal_mode=terminal_mode)
-        manga = pick_manga(mangas)
+        manga = pick_manga(mangas, prompt=ADULT_PROMPT)
 
 
 def browse_chapters(manga: dict, initial_chapter_id: Optional[str] = None, download_mode: bool = False, terminal_mode: bool = False):
@@ -492,10 +520,12 @@ def download_chapter(chapter: dict, manga_title: str):
 
 # --- Interactive Pickers (FZF & Fallbacks) ---
 
-def pick_manga(mangas: list):
-    """Search results picker. Returns the manga, or None on Esc."""
+def pick_manga(mangas: list, prompt: str = "Selecciona manga > ", adult_count: int = 0):
+    """Search results picker. Returns the manga, ADULT_CATEGORY, or None on Esc."""
     options = [(m, manga_label(m)) for m in mangas]
-    return choose(options, prompt="Selecciona manga > ")
+    if adult_count:
+        options.append((ADULT_CATEGORY, adult_category_label(adult_count)))
+    return choose(options, prompt=prompt)
 
 
 def pick_chapter(chapters: list, manga_title: str):
@@ -507,6 +537,10 @@ def pick_chapter(chapters: list, manga_title: str):
 def manga_label(manga: dict) -> str:
     author = manga.get("autor") or "Desconocido"
     return f"{manga.get('titulo', '')}  {CLR_DIM}({author}){CLR_RESET}"
+
+
+def adult_category_label(count: int) -> str:
+    return f"{CLR_YELLOW}+18 NSFW →{CLR_RESET} {results_count(count)} solo para adultos"
 
 
 def chapter_label(chapter: dict) -> str:
