@@ -8,4 +8,4 @@
 4. [Banner subtitle](tasks/banner-subtitle.md) — done
 5. [README rewrite](tasks/readme.md) — done
 6. [Typo-tolerant search](tasks/typo-tolerant-search.md) — done
-7. [AUR and Homebrew publishing issue](tasks/publishing-issue.md) — pending
+7. [AUR and Homebrew publishing issue](tasks/publishing-issue.md) — done

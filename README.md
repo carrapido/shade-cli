@@ -63,7 +63,7 @@ make install PREFIX="$HOME/.local"
 
 Revisa que `~/.local/bin` esté en tu `PATH`.
 
-> Los paquetes para AUR y Homebrew están en preparación.
+> Los paquetes para AUR y Homebrew están en preparación ([#1](https://github.com/carrapido/shade-cli/issues/1)).
 
 ### Actualizar y desinstalar
 
