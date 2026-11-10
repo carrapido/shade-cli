@@ -3,10 +3,13 @@ BINDIR ?= $(PREFIX)/bin
 DOCDIR ?= $(PREFIX)/share/doc/shade-cli
 LICDIR ?= $(PREFIX)/share/licenses/shade-cli
 
-.PHONY: all install uninstall
+.PHONY: all install uninstall test
 
 all:
 	@echo "Nada que compilar. Ejecuta 'sudo make install' para instalar shade-cli en $(BINDIR)."
+
+test:
+	python3 -m unittest discover -s tests
 
 install:
 	install -d $(DESTDIR)$(BINDIR)
