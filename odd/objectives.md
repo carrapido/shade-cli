@@ -10,3 +10,4 @@
 6. [Typo-tolerant search](tasks/typo-tolerant-search.md) — done
 7. [AUR and Homebrew publishing issue](tasks/publishing-issue.md) — done
 8. [+18 NSFW results in their own category](tasks/nsfw-category.md) — done
+9. [Search tags: -nsfw and -<genre>](tasks/search-tags.md) — done

@@ -136,7 +136,7 @@ class SearchScreenTest(unittest.TestCase):
              mock.patch.object(shade, "pick_manga", return_value=None), \
              mock.patch.object(shade, "print_info"):
             shade.browse_search_results("naurto", download_mode=False, terminal_mode=False)
-        search.assert_called_once_with("naurto")
+        search.assert_called_once_with("naurto", [])
 
 
 if __name__ == "__main__":

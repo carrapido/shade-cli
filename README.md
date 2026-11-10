@@ -82,7 +82,21 @@ shade-cli berserk       # busca directo
 shade-cli -c            # abre el último capítulo que leíste
 shade-cli -d berserk    # descarga capítulos como .cbz
 shade-cli -t berserk    # lee dentro de la terminal (requiere timg)
+shade-cli --generos     # lista los géneros que puedes usar como etiqueta
 ```
+
+### Etiquetas en la búsqueda
+
+Las palabras que empiezan con `-` son etiquetas que filtran la búsqueda. Puedes combinarlas, y también usarlas sin título.
+
+| Escribes | Obtienes |
+| --- | --- |
+| `boku no hero -nsfw` | Directo la lista de títulos +18 de esa búsqueda. También sirven `-18` y `-+18`. |
+| `naruto -accion` | Solo los resultados del género Acción. No importan los acentos ni las mayúsculas. |
+| `-romance -drama` | Series que son de Romance **y** de Drama, sin buscar un título. |
+| `-boys-love` | Los géneros de varias palabras se escriben con guiones. |
+
+`shade-cli --generos` te muestra cada etiqueta con su número de series. Si escribes un género que no existe, shade-cli no busca nada y te sugiere el más parecido (`-romanse` → *¿Quisiste decir: -romance?*). `-nsfw` filtra solo los resultados de tu búsqueda, porque el sitio no tiene un filtro de adultos; combínala con un título o un género.
 
 ### Pantallas y teclas
 
@@ -97,7 +111,7 @@ shade-cli tiene cuatro pantallas. En todas puedes escribir para filtrar, **Enter
 
 Los capítulos aparecen en orden de lectura (0.5, 1, 1.5, 2…).
 
-Los títulos **+18 NSFW** nunca se mezclan con los demás. Si la búsqueda encuentra alguno, la lista de resultados termina con una entrada **+18 NSFW** que dice cuántos hay, y shade-cli te avisa antes de mostrar la lista. Esa entrada abre una lista solo con los títulos +18; Esc te regresa a los resultados normales. La clasificación viene del sitio: shade-cli separa las series que shademanga.com marca para mayores de edad.
+Los títulos **+18 NSFW** nunca se mezclan con los demás. Si la búsqueda encuentra alguno, la lista de resultados termina con una entrada **+18 NSFW** que dice cuántos hay, y shade-cli te avisa antes de mostrar la lista. Para ir directo a ellos, agrega `-nsfw` a tu búsqueda (ver [Etiquetas en la búsqueda](#etiquetas-en-la-búsqueda)). Esa entrada abre una lista solo con los títulos +18; Esc te regresa a los resultados normales. La clasificación viene del sitio: shade-cli separa las series que shademanga.com marca para mayores de edad.
 
 **¿Qué sigue?** aparece después de abrir cada capítulo:
 
@@ -113,6 +127,7 @@ Los títulos **+18 NSFW** nunca se mezclan con los demás. Si la búsqueda encue
 | `-c`, `--continue` | Abre el último capítulo que leíste. Con Esc pasas a la lista de capítulos y después a *Buscar manga*. |
 | `-d`, `--download` | En lugar de abrir capítulos, los descarga como `.cbz` en la carpeta de descargas y regresa a la lista para que bajes otro. |
 | `-t`, `--terminal` | Muestra las páginas dentro de la terminal con `timg` en lugar del visor de PDF. |
+| `--generos` | Lista los géneros que puedes usar como etiqueta, con su número de series. |
 | `-v`, `--version` | Muestra la versión. |
 | `-h`, `--help` | Muestra la ayuda, las teclas y las rutas. |
 

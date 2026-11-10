@@ -11,6 +11,7 @@ import re
 import json
 import math
 import ssl
+import functools
 import shutil
 import tempfile
 import unicodedata
@@ -19,8 +20,9 @@ import subprocess
 import urllib.request
 import urllib.parse
 from pathlib import Path
-from typing import Optional
-from difflib import SequenceMatcher
+from collections.abc import Sequence
+from typing import NamedTuple, Optional
+from difflib import SequenceMatcher, get_close_matches
 from concurrent.futures import ThreadPoolExecutor
 
 # --- Constants & Configuration ---
@@ -62,6 +64,10 @@ ADULT_CATEGORY = object()
 
 ADULT_PROMPT = "+18 NSFW > "
 
+# Search tags: words in the search bar that start with "-".
+ADULT_TAGS = {"nsfw", "18", "+18"}
+SEARCH_TAGS_HINT = "Etiquetas: -nsfw solo +18 · -<género> filtra (naruto -accion) · géneros: shade-cli --generos"
+
 
 # --- Main Entry Point ---
 
@@ -71,6 +77,9 @@ def main():
 
     if args.version:
         print(f"shade-cli v{VERSION}")
+        return
+    if args.genres:
+        print_genre_tags()
         return
 
     print_banner()
@@ -111,17 +120,45 @@ def browse_from_search(initial_query: str, download_mode: bool = False, terminal
         query = ask_search_query()
 
 
-def browse_search_results(query: str, download_mode: bool = False, terminal_mode: bool = False):
-    """Search results screen: general titles, with +18 titles behind their own entry. Esc returns to the search prompt."""
-    print_info(f"Buscando '{query}'...")
-    mangas = search_series(query)
+def browse_search_results(raw_query: str, download_mode: bool = False, terminal_mode: bool = False):
+    """Search results screen. Tags in the query: -nsfw opens the +18 list directly, -<género> filters by genre.
+    Esc returns to the search prompt."""
+    query = parse_search_query(raw_query)
+    mangas = run_search(query, raw_query)
     if not mangas:
-        print_warn(f"No se encontraron resultados para: '{query}'")
         return
 
     general, adult = split_by_age_rating(mangas)
+    if query.adult_only:
+        browse_adult_only(adult, raw_query, download_mode=download_mode, terminal_mode=terminal_mode)
+    else:
+        browse_general_results(general, adult, download_mode=download_mode, terminal_mode=terminal_mode)
+
+
+def run_search(query: "SearchQuery", raw_query: str) -> list:
+    """Resolves the genre tags and searches. Warns and returns [] when a tag is unknown or nothing matches."""
+    genres = resolve_genres(query.genre_tags)
+    if genres is None:
+        return []
+    print_info(f"Buscando '{raw_query}'...")
+    mangas = search_series(query.text, genres)
+    if not mangas:
+        print_warn(f"No se encontraron resultados para: '{raw_query}'")
+    return mangas
+
+
+def browse_adult_only(adult: list, raw_query: str, download_mode: bool = False, terminal_mode: bool = False):
+    """-nsfw: straight to the +18 list. Esc returns to the search prompt."""
+    if not adult:
+        print_warn(f"No hay resultados +18 NSFW para '{raw_query}'.")
+        return
+    browse_adult_results(adult, download_mode=download_mode, terminal_mode=terminal_mode)
+
+
+def browse_general_results(general: list, adult: list, download_mode: bool = False, terminal_mode: bool = False):
+    """General titles, with the +18 ones behind their own entry at the end. Esc returns to the search prompt."""
     if adult:
-        print_info(f"{results_count(len(adult))} +18 NSFW quedaron aparte: están en «+18 NSFW», al final de la lista.")
+        print_info(f"{results_count(len(adult))} +18 NSFW quedaron aparte: elige «+18 NSFW» al final de la lista o busca con -nsfw.")
     choice = pick_manga(general, adult_count=len(adult))
     while choice:
         if choice is ADULT_CATEGORY:
@@ -221,24 +258,89 @@ def reader_menu_options(chapter: dict, chapters: list) -> list:
     return options
 
 
+# --- Search tags ---
+# "naruto -accion -nsfw": words starting with "-" are tags. -nsfw keeps only +18 titles (the API has
+# no adult filter, so it is applied locally); any other tag is a genre, sent to the API's `genero` filter.
+
+class SearchQuery(NamedTuple):
+    text: str
+    genre_tags: list
+    adult_only: bool
+
+
+def parse_search_query(raw_query: str) -> SearchQuery:
+    """Splits the search bar text into title words and tags. Hyphens inside a genre tag stand for spaces."""
+    words, genre_tags, adult_only = [], [], False
+    for word in raw_query.split():
+        tag = word[1:].lower()
+        if not (word.startswith("-") and tag):
+            words.append(word)
+        elif tag in ADULT_TAGS:
+            adult_only = True
+        else:
+            genre_tags.append(tag.replace("-", " "))
+    return SearchQuery(" ".join(words), genre_tags, adult_only)
+
+
+def resolve_genres(tags: list) -> Optional[list]:
+    """Catalog names for the genre tags, or None after warning about the first unknown one."""
+    if not tags:
+        return []
+    names_by_key = genre_names_by_key()
+    unknown = [tag for tag in tags if normalize_title(tag) not in names_by_key]
+    if unknown:
+        warn_unknown_genre(unknown[0], names_by_key)
+        return None
+    return [names_by_key[normalize_title(tag)] for tag in tags]
+
+
+def genre_names_by_key() -> dict:
+    """Genre names keyed by their accent- and punctuation-free form; on a collision the genre with more series wins."""
+    by_key = {}
+    for genre in sorted(fetch_genres(), key=lambda g: g.get("total", 0)):
+        by_key[normalize_title(genre["nombre"])] = genre["nombre"]
+    return by_key
+
+
+def warn_unknown_genre(tag: str, names_by_key: dict):
+    close = get_close_matches(normalize_title(tag), names_by_key, n=3, cutoff=0.6)
+    suggestion = f" ¿Quisiste decir: {', '.join(genre_tag(names_by_key[key]) for key in close)}?" if close else ""
+    print_warn(f"No existe el género '{tag}'.{suggestion} Ve la lista con: shade-cli --generos")
+
+
+def genre_tag(genre_name: str) -> str:
+    """The tag to type for a genre: 'Boys Love' → '-boys-love', 'Acción' → '-accion'."""
+    return "-" + normalize_title(genre_name).replace(" ", "-")
+
+
+def print_genre_tags():
+    """--generos: every genre as the tag to type, most series first, one line per tag."""
+    printed = set()
+    for genre in sorted(fetch_genres(), key=lambda g: g.get("total", 0), reverse=True):
+        tag = genre_tag(genre["nombre"])
+        if tag not in printed:
+            printed.add(tag)
+            print(f"{tag:<30} {genre['nombre']} ({genre.get('total', 0)})")
+
+
 # --- Typo-tolerant search ---
 # The API only matches substrings ("berse" finds Berserk, "berzerk" finds nothing) and pages its
 # ~48,700 series 30 at a time, so the catalog cannot be searched locally. When the exact search
 # finds nothing, the app asks for pieces of the query that survive a typo and ranks what comes
 # back by similarity to what the user typed.
 
-def search_series(query: str) -> list:
-    """Exact search first; when it finds nothing, the typo-tolerant search."""
-    exact = fetch_search_results(query)
-    if exact:
+def search_series(query: str, genres: Sequence[str] = ()) -> list:
+    """Exact search first; when it finds nothing, the typo-tolerant search. Genres filter both."""
+    exact = fetch_search_results(query, genres)
+    if exact or not query:
         return exact
     print_info(f"Sin coincidencias exactas para '{query}'; buscando títulos parecidos...")
-    return find_similar_series(query)
+    return find_similar_series(query, genres)
 
 
-def find_similar_series(query: str) -> list:
+def find_similar_series(query: str, genres: Sequence[str] = ()) -> list:
     """Searches pieces of the query that survive a typo and keeps the titles most similar to it."""
-    batches = fetch_probe_results(search_probes(query))
+    batches = fetch_probe_results(search_probes(query), genres)
     if batches and all(batch is None for batch in batches):
         print_warn("El servidor no respondió a la búsqueda aproximada; intenta de nuevo en unos segundos.")
         return []
@@ -279,10 +381,11 @@ def swapped_letter_probes(words: list) -> list:
     return [word[:i] + word[i + 1] + word[i] + word[i + 2:] for i in range(len(word) - 1)]
 
 
-def fetch_probe_results(probes: list) -> list:
+def fetch_probe_results(probes: list, genres: Sequence[str] = ()) -> list:
     """Search results per probe, PARALLEL_PROBES at a time; None for a probe whose request failed."""
+    search = functools.partial(try_fetch_search_results, genres=genres)
     with ThreadPoolExecutor(max_workers=PARALLEL_PROBES) as executor:
-        return list(executor.map(try_fetch_search_results, probes))
+        return list(executor.map(search, probes))
 
 
 def unique_series(batches: list) -> list:
@@ -554,7 +657,7 @@ def chapter_label(chapter: dict) -> str:
 
 def ask_search_query():
     """Search prompt. Returns the query, or None on Esc or an empty answer."""
-    return ask_text("Buscar manga > ")
+    return ask_text("Buscar manga > ", hint=SEARCH_TAGS_HINT)
 
 
 def choose(options: list, prompt: str):
@@ -582,29 +685,40 @@ def choose_from_numbered_list(options: list, prompt: str):
     return options[number - 1][0] if number else None
 
 
-def ask_text(prompt: str, default: str = ""):
-    """Free-text prompt, optionally prefilled. Returns the answer, or None on Esc or an empty answer."""
+def ask_text(prompt: str, default: str = "", hint: str = ""):
+    """Free-text prompt, optionally prefilled and with a hint line. Returns the answer, or None on Esc or an empty answer."""
     if has_fzf():
-        return ask_text_with_fzf(prompt, default)
-    hint = f"[{default}] " if default else ""
-    return read_line(f"{CLR_BOLD}{CLR_GREEN}{prompt}{CLR_RESET}{hint}") or default or None
+        return ask_text_with_fzf(prompt, default, hint)
+    if hint:
+        print(f"{CLR_DIM}{hint}{CLR_RESET}")
+    shown_default = f"[{default}] " if default else ""
+    return read_line(f"{CLR_BOLD}{CLR_GREEN}{prompt}{CLR_RESET}{shown_default}") or default or None
 
 
 # --- API Client ---
 
-def fetch_search_results(query: str) -> list:
-    """Searches series via ShadeManga API."""
-    encoded = urllib.parse.quote(query)
-    data = make_api_request(f"/series-locales?q={encoded}")
+def fetch_search_results(query: str, genres: Sequence[str] = ()) -> list:
+    """Searches series by title. Genres, when given, must all match: the API reads `genero=A,B` as an AND."""
+    params = {"q": query}
+    if genres:
+        params["genero"] = ",".join(genres)
+    data = make_api_request("/series-locales?" + urllib.parse.urlencode(params, quote_via=urllib.parse.quote))
     return data if isinstance(data, list) else []
 
 
-def try_fetch_search_results(query: str) -> Optional[list]:
+def try_fetch_search_results(query: str, genres: Sequence[str] = ()) -> Optional[list]:
     """fetch_search_results, or None when the request fails (HTTP 429, no network)."""
     try:
-        return fetch_search_results(query)
+        return fetch_search_results(query, genres)
     except OSError:  # urllib's URLError and HTTPError are OSError subclasses.
         return None
+
+
+@functools.lru_cache(maxsize=1)
+def fetch_genres() -> list:
+    """The site's genre catalog (`nombre`, `total`), fetched once per run."""
+    data = make_api_request("/series-locales/generos")
+    return data if isinstance(data, list) else []
 
 
 def fetch_chapters(series_public_id: str) -> list:
@@ -702,19 +816,20 @@ def run_fzf(lines: list, prompt: str):
     return parse_fzf_choice(result.returncode, result.stdout)
 
 
-def ask_text_with_fzf(prompt: str, default: str):
+def ask_text_with_fzf(prompt: str, default: str, hint: str):
     """fzf with an empty list used as a text field, so Esc and Ctrl-C behave as in the lists."""
-    command = fzf_command(prompt) + ["--print-query", "--info=hidden", "--height=~10", f"--query={default}"]
+    command = fzf_command(prompt, hint) + ["--print-query", "--info=hidden", "--height=~10", f"--query={default}"]
     result = subprocess.run(command, input="", stdout=subprocess.PIPE, text=True)
     return parse_fzf_query(result.returncode, result.stdout)
 
 
-def fzf_command(prompt: str) -> list:
+def fzf_command(prompt: str, hint: str = "") -> list:
     fzf_bin = shutil.which("fzf") or "/opt/homebrew/bin/fzf"
+    header = f"{FZF_KEYS_HINT}\n{hint}" if hint else FZF_KEYS_HINT
     return [
         fzf_bin,
         f"--prompt={prompt}",
-        f"--header={FZF_KEYS_HINT}",
+        f"--header={header}",
         f"--expect={FZF_QUIT_KEY}",
         "--reverse",
         "--ansi",
@@ -803,6 +918,9 @@ def parse_arguments():
         epilog=(
             "teclas:\n"
             "  Esc regresa a la pantalla anterior · Ctrl-C sale\n\n"
+            "etiquetas (en la búsqueda):\n"
+            "  -nsfw                  solo títulos +18\n"
+            "  -<género>              filtra por género: naruto -accion, -boys-love (ver --generos)\n\n"
             "archivos:\n"
             "  PDF en caché           ~/.cache/shade-cli/\n"
             "  PDF guardados y .cbz   $SHADE_DOWNLOAD_DIR/<manga> o ~/Downloads/shade-cli/<manga>\n"
@@ -813,6 +931,7 @@ def parse_arguments():
     parser.add_argument("-c", "--continue", dest="continue_reading", action="store_true", help="Abre el último capítulo que leíste")
     parser.add_argument("-d", "--download", action="store_true", help="Descarga capítulos como .cbz en la carpeta de descargas")
     parser.add_argument("-t", "--terminal", action="store_true", help="Lee en la terminal con timg en lugar del visor de PDF")
+    parser.add_argument("--generos", dest="genres", action="store_true", help="Muestra los géneros que puedes usar como etiqueta")
     parser.add_argument("-v", "--version", action="store_true", help="Muestra la versión")
     return parser.parse_args()
 
