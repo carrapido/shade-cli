@@ -14,23 +14,23 @@
 
 ---
 
-## ✨ Características
+## Características
 
-- 🔍 **Búsqueda difusa interactiva**: Menú rápido con [`fzf`](https://github.com/junegunn/fzf) para encontrar series y capítulos.
-- 🚫 **Cero anuncios**: Conecta directamente a la API REST y al CDN de imágenes WebP en alta resolución, esquivando scripts y popunders del navegador.
-- ⚡ **Descarga en paralelo**: Carga todas las páginas de un capítulo simultáneamente en menos de 1 segundo.
-- 📖 **Experiencia PDF nativa**: Compila las imágenes en un único archivo PDF optimizado y lo abre al instante en tu visor del sistema:
+-  **Búsqueda difusa interactiva**: Menú rápido con [`fzf`](https://github.com/junegunn/fzf) para encontrar series y capítulos.
+-  **Cero anuncios**: Conecta directamente a la API REST y al CDN de imágenes WebP en alta resolución, esquivando scripts y popunders del navegador.
+-  **Descarga en paralelo**: Carga todas las páginas de un capítulo simultáneamente en menos de 1 segundo.
+-  **Experiencia PDF nativa**: Compila las imágenes en un único archivo PDF optimizado y lo abre al instante en tu visor del sistema:
   - **macOS**: Abre en **Vista Previa** (con desplazamiento continuo y gestos trackpad).
   - **Arch Linux**: Compatible con `zathura`, `mupdf`, `evince`, `okular` o el predeterminado vía `xdg-open`.
-- 🔁 **Flujo `ani-cli` continuo**: Al terminar un capítulo, presiona <kbd>Enter</kbd> en tu terminal para cargar y abrir automáticamente el siguiente.
-- 💾 **Historial persistente (`-c`)**: Recuerda automáticamente el último manga y capítulo leído.
-- 📦 **Modo descarga (`-d`)**: Empaqueta capítulos completos en archivos `.cbz` listos para coleccionar.
+-  **Flujo `ani-cli` continuo**: Al terminar un capítulo, presiona <kbd>Enter</kbd> en tu terminal para cargar y abrir automáticamente el siguiente.
+-  **Historial persistente (`-c`)**: Recuerda automáticamente el último manga y capítulo leído.
+-  **Modo descarga (`-d`)**: Empaqueta capítulos completos en archivos `.cbz` listos para coleccionar.
 
 ---
 
-## 🚀 Instalación
+##  Instalación
 
-### 🏔️ Arch Linux
+###  Arch Linux
 
 #### 1. Instalar dependencias
 ```bash
@@ -40,7 +40,7 @@ sudo pacman -S python fzf graphicsmagick zathura zathura-pdf-mupdf xdg-utils
 
 #### 2. Clonar e instalar
 ```bash
-git clone https://github.com/TU_USUARIO/shade-cli.git
+git clone https://github.com/carrapido/shade-cli.git
 cd shade-cli
 
 # Opción A: Con makepkg (PKGBUILD)
@@ -52,7 +52,7 @@ sudo make install
 
 ---
 
-### 🍎 macOS
+###  macOS
 
 #### 1. Instalar dependencias (con Homebrew)
 ```bash
@@ -69,7 +69,7 @@ sudo make install
 
 ---
 
-## 🎮 Uso
+##  Uso
 
 ### Búsqueda interactiva
 ```bash
@@ -116,7 +116,7 @@ shade-cli -v
 
 ---
 
-## ⚙️ Configuración (Linux)
+##  Configuración (Linux)
 
 Por defecto en Linux, `shade-cli` intentará abrir el PDF con tu visor configurado en las siguientes variables de entorno:
 
@@ -131,7 +131,7 @@ Si no se define ninguna, buscará en orden: `zathura` ➔ `mupdf` ➔ `xdg-open`
 
 ---
 
-## 📂 Estructura del Proyecto
+##  Estructura del Proyecto
 
 ```text
 shade-cli/
@@ -146,6 +146,6 @@ shade-cli/
 
 ---
 
-## 📄 Licencia
+##  Licencia
 
 Este proyecto está bajo la Licencia **MIT**. Consulta el archivo [LICENSE](LICENSE) para más detalles.
